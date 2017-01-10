@@ -29,16 +29,19 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.Vector;
 
+import org.apache.commons.configuration.Configuration;
 import org.apache.log4j.Logger;
+import org.jbrain.qlink.QConfig;
+import org.jbrain.qlink.QLinkServer;
 import org.jbrain.qlink.QSession;
 import org.jbrain.qlink.cmd.*;
 import org.jbrain.qlink.cmd.action.*;
 
 
-
 // this class handles all comm to from client.
 public class QConnection extends Thread {
 	private static final int MAX_CONSECUTIVE_ERRORS=20;
+	private static Configuration _config=QConfig.getInstance();
 	private static Logger _log=Logger.getLogger(QConnection.class);
 	private static Timer _timer=new Timer();
 	private static TimerTask _pingTimer=null;;
@@ -54,7 +57,7 @@ public class QConnection extends Thread {
 	private InputStream _is;
 	private OutputStream _os;
 	private HabitatConnection _hconn;
-        private QSession _session;
+	private QSession _session;
 	private static final int QSIZE = 16;
 	private KeepAliveTask _keepAliveTask;
 	private SuspendWatchdog _suspendWatchdog;
@@ -108,11 +111,12 @@ public class QConnection extends Thread {
 		}
 	};
     // TODO: hconn is kind of hacky. We should really have a more generic proxy mechanism than this. //
-    public QConnection(InputStream is, OutputStream os, HabitatConnection hconn) {
+    public QConnection(InputStream is, OutputStream os, QLinkServer qServer) {
 		init();
 		_is=is;
 		_os=os;
-                _hconn=hconn;
+		_hconn = new HabitatConnection(qServer);
+		_hconn.connect();
 		this.setDaemon(true);
 		resumeLink();
 	}
@@ -180,13 +184,15 @@ public class QConnection extends Thread {
 												write(new ResetAck());
 												break;
 											case AbstractAction.CMD_ACTION:
-                                                                                            if (cmd instanceof HabitatAction) {
-                                                                                                _hconn.send(cmd.getBytes(), _session.getHandle() == null ? "UNKNOWN" : _session.getHandle().toString());
-                                                                                            } else if (cmd instanceof Action)
-                                                                                                processActionEvent(new ActionEvent(this,(Action)cmd));
-                                                                                            else
-                                                                                                _log.error("Tried to process action " + cmd.getName());
-                                                                                            break;
+												if (cmd instanceof HabitatAction) {
+													byte[] packetData = new byte[i - start];
+													System.arraycopy(data, start, packetData, 0, i - start);
+													_hconn.send(packetData, _session.getHandle() == null ? "UNKNOWN" : _session.getHandle().toString());
+												} else if (cmd instanceof Action)
+													processActionEvent(new ActionEvent(this,(Action)cmd));
+												else
+													_log.error("Tried to process action " + cmd.getName());
+												break;
 											case ResetAck.CMD_RESETACK:
 												break;
 											case SequenceError.CMD:
@@ -305,6 +311,9 @@ public class QConnection extends Thread {
 					_is.close();
 				} catch (IOException e) {
 				}
+			}
+			if(_hconn!=null) {
+				_hconn.close();
 			}
 		}
 	}
@@ -440,7 +449,7 @@ public class QConnection extends Thread {
 		stopTimer();
 		if(_keepAliveTask!=null)
 			_keepAliveTask.cancel();
-		else
+		else if(_config.getBoolean("qlink.keepalive.enabled"))
 			_log.error("Suspending, but KeepAliveTask is null!");
 		_keepAliveTask=null;
 		_bSuspend=true;
@@ -461,12 +470,13 @@ public class QConnection extends Thread {
 		if(_suspendWatchdog!=null)
 			_suspendWatchdog.cancel();
 		_suspendWatchdog=null;
-		if(_keepAliveTask==null) {
+		boolean shouldKeepAlive = _config.getBoolean("qlink.keepalive.enabled");
+		if(_keepAliveTask==null && shouldKeepAlive) {
 			_log.debug("Creating keep alive timer");
 			_keepAliveTask=new KeepAliveTask();
 			_log.debug("Scheduling keep alive timer for 60 second intervals");
 			_timer.scheduleAtFixedRate(_keepAliveTask,60000,60000);
-		} else
+		} else if(shouldKeepAlive)
 			_log.warn("Resuming, but KeepAliveTask alreayd active");
 		_bSuspend=false;
 		try {

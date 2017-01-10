@@ -1,11 +1,11 @@
-FROM google/debian:wheezy
+FROM philcollins/aurora-centos7
 
-RUN apt-get update && apt-get upgrade -y && apt-get -y install openjdk-7-jre
+RUN yum install -y java-1.8.0-openjdk maven mariadb
 
-RUN mkdir /usr/local/qlink
+ADD . /usr/local/qlink
+WORKDIR /usr/local/qlink
+RUN /usr/local/qlink/package
 
-ADD ./target/qlink-0.1.0.jar /usr/local/qlink/qlink.jar
-
-CMD /usr/bin/java -jar /usr/local/qlink/qlink.jar -configFile /etc/qlink/qlink_prod.properties
+ENTRYPOINT /usr/local/qlink/dockerrun
 
 EXPOSE 5190
